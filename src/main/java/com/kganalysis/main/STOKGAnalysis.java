@@ -6,8 +6,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -29,6 +31,8 @@ import org.apache.jena.vocabulary.RDF;
 import org.coode.owlapi.turtle.TurtleOntologyFormat;
 import org.mindswap.pellet.jena.PelletReasonerFactory;
 import org.semanticweb.owlapi.apibinding.OWLManager;
+import org.semanticweb.owlapi.formats.TurtleDocumentFormat;
+import org.semanticweb.owlapi.io.StringDocumentTarget;
 import org.semanticweb.owlapi.model.AddAxiom;
 import org.semanticweb.owlapi.model.AxiomType;
 import org.semanticweb.owlapi.model.IRI;
@@ -52,10 +56,13 @@ import org.semanticweb.owlapi.model.OWLOntologyCreationException;
 import org.semanticweb.owlapi.model.OWLOntologyFormat;
 import org.semanticweb.owlapi.model.OWLOntologyManager;
 import org.semanticweb.owlapi.model.OWLOntologyStorageException;
+import org.semanticweb.owlapi.model.PrefixManager;
 import org.semanticweb.owlapi.reasoner.NodeSet;
 import org.semanticweb.owlapi.reasoner.OWLReasoner;
 import org.semanticweb.owlapi.reasoner.OWLReasonerFactory;
 import org.semanticweb.owlapi.reasoner.structural.StructuralReasonerFactory;
+import org.semanticweb.owlapi.util.DefaultPrefixManager;
+import org.semanticweb.owlapi.util.OWLEntityRemover;
 import org.semanticweb.owlapi.util.SimpleIRIMapper;
 
 import com.hp.hpl.jena.util.FileManager;
@@ -87,6 +94,7 @@ public class STOKGAnalysis {
 	public static void main(String[] args) throws Throwable {
 		ConfigManager.loadConfig();
 		readOntology();
+		//shouldDeleteIndividuals();
 		rdfmt();
 
 	}
@@ -114,9 +122,8 @@ public class STOKGAnalysis {
 		sb.append('\n');
 
 		Set<OWLClass> classes = ontology.getClassesInSignature();
+		Set<OWLNamedIndividual> individuals = ontology.getIndividualsInSignature();
 
-		//System.out.println("Classes");
-		System.out.println("--------------------------------");
 		for (OWLClass cls : classes) {
 			// Of which object properties is this class domain of
 			ArrayList<OWLObjectProperty>objPropertiesDomainOfClass = ClassAxiomProperty.searchForObjectDomainClass(ontology, cls);
@@ -125,7 +132,12 @@ public class STOKGAnalysis {
 					//which is the range of this property
 					predicateToWrite = owlObjectProperty.getIRI().toString();
 					OWLClass range = ClassAxiomProperty.searchForObjectRangeClass(ontology, owlObjectProperty);
-					objectToWrite = range.getIRI().toString();
+					if(range!=null){
+						objectToWrite = range.getIRI().toString();
+					}else{
+						objectToWrite = "No range";
+					}
+
 					sb.append(cls.getIRI());
 					sb.append(',');
 					sb.append(predicateToWrite);
@@ -134,7 +146,13 @@ public class STOKGAnalysis {
 					sb.append(',');
 					sb.append(getNameSpace(cls.getIRI().toString()));
 					sb.append(',');
-					sb.append(getNameSpace(range.getIRI().toString()));
+
+					if(range!=null){
+						sb.append(getNameSpace(range.getIRI().toString()));
+					}else{
+						sb.append(objectToWrite);
+					}
+
 					sb.append('\n');
 				}
 			}
@@ -164,12 +182,51 @@ public class STOKGAnalysis {
 				}
 			}
 
-			
+			getIndividualClass(cls);
+		}
+
+
+
+
+		for (OWLNamedIndividual ind : individuals) {
+			Set<OWLObjectPropertyAssertionAxiom> properties = ontology.getObjectPropertyAssertionAxioms(ind);
+			for (OWLObjectPropertyAssertionAxiom ax: properties) {
+				//System.out.println("IND  " + ind + " Property   " + ax.getProperty());
+			}
+
+			Set<OWLDataPropertyAssertionAxiom> dataProperties = ontology.getDataPropertyAssertionAxioms(ind);
+			for (OWLDataPropertyAssertionAxiom ax: dataProperties) {
+				//System.out.println("IND  " + "data property" + ax.getProperty());
+			}
+
+			Set<OWLClassAssertionAxiom> axioms = ontology.getClassAssertionAxioms(ind);
+			for (OWLClassAssertionAxiom ax: axioms) {
+				//System.out.println("IND  " + "assertions axioms" + ax.getClassExpression());
+			}
+
+
+
 		}
 
 		pw.write(sb.toString());
 		pw.close();
 
+	}
+
+	public static void getIndividualClass(OWLClass cls){
+		OWLReasonerFactory reasonerFactory = new StructuralReasonerFactory();
+
+		OWLReasoner reasoner = reasonerFactory.createReasoner(ontology);
+		NodeSet<OWLNamedIndividual> instances = reasoner.getInstances(cls, true);
+
+		for (OWLNamedIndividual ind : instances.getFlattened()) {
+			//System.out.println("Class   " + cls + "  Ind"  + individual.getIRI().getShortForm());
+			Set<OWLClassAssertionAxiom> axioms = ontology.getClassAssertionAxioms(ind);
+			for (OWLClassAssertionAxiom ax: axioms) {
+				System.out.println("Class " + cls + "IND  " + ind + "axioms" + ax.getClassExpression());
+				break;
+			}
+		}
 	}
 
 
@@ -190,6 +247,7 @@ public class STOKGAnalysis {
 		namespaces.put("http://purl.org/dc/terms/", "dcterms");
 		namespaces.put("http://www.ontology-of-units-of-measure.org/resource/om-2/","om2");
 		namespaces.put("http://dbpedia.org/ontology#","dbo");
+		namespaces.put("http://dbpedia.org/ontology/","dbo");
 
 
 		Set set = namespaces.entrySet();
@@ -214,14 +272,35 @@ public class STOKGAnalysis {
 		readOntologyOWLAPI();
 	}
 
-	/**
-	 * Reads the ontology file using Jena
-	 */
-	public static void readOntologyJena(){
-		InputStream inputStream = FileManager.get().open(ConfigManager.getFilePath());
-		jenaModel = ModelFactory.createDefaultModel();
-		jenaModel.read(new InputStreamReader(inputStream), null, "TURTLE");
-	}
+	
+    public static void shouldDeleteIndividuals() throws Exception {
+        OWLOntologyManager man = OWLManager.createOWLOntologyManager();
+        TurtleDocumentFormat turtleFormat = new TurtleDocumentFormat();
+
+        turtleFormat.setPrefix("sto", "https://w3id.org/i40/sto#");
+        turtleFormat.setPrefix("dcterms", "http://purl.org/dc/terms/");
+        turtleFormat.setPrefix("om2", "http://www.ontology-of-units-of-measure.org/resource/om-2/");
+        turtleFormat.setPrefix("foaf", "http://xmlns.com/foaf/0.1/");
+        turtleFormat.setPrefix("dul", "http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#");
+        turtleFormat.setPrefix("prov", "http://www.w3.org/ns/prov#");
+        turtleFormat.setPrefix("dbo", "http://dbpedia.org/ontology/");
+        turtleFormat.setPrefix("iira", "http://example.org/iira#");
+        turtleFormat.setPrefix("rami", "https://w3id.org/i40/rami#");
+        turtleFormat.setPrefix("idsram", "https://w3id.org/ids/ram/");
+        
+
+        OWLEntityRemover remover = new OWLEntityRemover(Collections.singleton(ontology));
+        for (OWLNamedIndividual ind : ontology.getIndividualsInSignature()) {
+            ind.accept(remover);
+        }
+        man.applyChanges(remover.getChanges());
+        
+        File fileformated = new File("E:/tmp/sto/sto_no.ttl");
+
+        man.saveOntology(ontology, turtleFormat, IRI.create(fileformated.toURI()));
+    }
+	
+	
 
 
 	/**
